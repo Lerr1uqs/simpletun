@@ -25,6 +25,28 @@ simpletun -h
 
 -------
 
+test in docker
+PS: --privileged --cap-add=NET_ADMIN is indispensable for use tun dev inside docker
+```shell
+M> docker run --privileged --cap-add=NET_ADMIN -it --name=ubuntu2004 ubuntu:20.04 /bin/bash
+M> docker cp ./simpletun 489fc64b9e08:/root
+S> apt update
+S> apt install -y iputils-ping net-tools wget netcat
+S> root@a2cb2b42e86f:~# ifconfig 
+eth0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+        inet 172.17.0.2  netmask 255.255.0.0  broadcast 172.17.255.255
+        ether 02:42:ac:11:00:02  txqueuelen 0  (Ethernet)
+M> sudo ./simpletun -i fxxk -s 
+[+] Successfully connected to interface fxxk
+S> ./simpletun -i aaa -c 172.17.0.1
+[+] Successfully connected to interface aaa
+[+] CLIENT: Connected to server 172.17.0.1
+
+
+```
+
+-------
+
 Refer to http://backreference.org/2010/03/27/tuntap-interface-tutorial/ for 
 more information on tun/tap interfaces in Linux in general, and on this 
 program in particular.
