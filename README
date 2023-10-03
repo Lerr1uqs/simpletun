@@ -4,7 +4,7 @@ simpletun, a (too) simple tunnelling program.
 
 To compile the program, just do
 
-$ gcc simpletun.c -o simpletun
+$ gcc -g -no-pie -O0 simpletun.c -o simpletun
 
 If you have GNU make, you can also exploit implicit targets and do
 
@@ -13,13 +13,13 @@ $ make simpletun
 -------
 
 Usage:
-simpletun -i <ifacename> [-s|-c <serverIP>] [-p <port>] [-u|-a] [-d]
+simpletun -i <ifacename> [-s|-c <serverIP>] [-p <port>] [-u | -a] [-d]
 simpletun -h
 
 -i <ifacename>: Name of interface to use (mandatory)
--s|-c <serverIP>: run in server mode (-s), or specify server address (-c <serverIP>) (mandatory)
+-s | -c <serverIP>: run in server mode (-s), or specify server address (-c <serverIP>) (mandatory)
 -p <port>: port to listen on (if run in server mode) or to connect to (in client mode), default 55555
--u|-a: use TUN (-u, default) or TAP (-a)
+-u | -a: use TUN (-u, default) or TAP (-a)
 -d: outputs debug information while running
 -h: prints this help text
 

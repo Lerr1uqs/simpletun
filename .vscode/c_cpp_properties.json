@@ -1,0 +1,22 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+				"${workspaceFolder}/lib/",
+                "/usr/include/*",
+                "/usr/include/**"
+            ],
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "c11",
+            "cppStandard": "c++14",
+            // "intelliSenseMode": "linux-clang-x64"
+            "intelliSenseMode": "linux-gcc-x64",
+            "defines": [
+                "_POSIX_C_SOURCE=199309L"
+            ]
+        }
+    ],
+    "version": 4
+}
