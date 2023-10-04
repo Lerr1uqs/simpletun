@@ -21,6 +21,7 @@
 // #include <bits/ioctls.h>
 // #include <bits/ioctl-types.h>
 // #include <sys/ttydefaults.h>
+#include <netinet/ip6.h>
 
 /* buffer for reading from tun/tap interface, must be >= 1500 */
 #define BUFSIZE 2000   
@@ -30,6 +31,86 @@
 
 int debug;
 char *progname;
+// ------------------- ip head parse -----------------
+/*
+60 00 00 00 00 08 3A FF  FE 80 00 00 00 00 00 00  |  `.....:.........
+84 16 F9 EF 98 C3 62 C0  FF 02 00 00 00 00 00 00  |  ......b.........
+00 00 00 00 00 00 00 02  85 00 03 AD 00 00 00 00  |  ................
+
+       0                1                2                3
+       0 1 2 3 4 5 6 7  8 9 0 1 2 3 4 5 6 7  8 9 0 1 2 3 4 5 6 7  8 9 0 1
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   0: |Version| Traffic Class |           Flow Label                  |
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   4: |         Payload Length        |  Next Header  |   Hop Limit    |
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   8: |                                                               |
+      .                                                               .
+      .                         Source Address                        .
+      .                                                               .
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+  24: |                                                               |
+      .                                                               .
+      .                      Destination Address                      .
+      .                                                               .
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+*/
+
+void print_ipv6_header(char *buf) {
+
+    struct ip6_hdr *ip6h = (struct ip6_hdr *)buf;
+    printf("IPv6 Header:\n");
+    printf("   |-Version     : %u\n", ip6h->ip6_vfc >> 4);
+    printf("   |-Traffic Class: 0x%02x\n", ip6h->ip6_flow & 0x0ff00000);
+    printf("   |-Flow Label  : 0x%05x\n", ip6h->ip6_flow & 0x000fffff);
+    printf("   |-Payload Length : %u\n", ntohs(ip6h->ip6_plen));
+    printf("   |-Next Header : %u\n", ip6h->ip6_nxt);
+    printf("   |-Hop Limit   : %u\n", ip6h->ip6_hops);
+
+    struct in6_addr src, dst;
+    memcpy(&src, &(ip6h->ip6_src), sizeof(struct in6_addr));
+    memcpy(&dst, &(ip6h->ip6_dst), sizeof(struct in6_addr));
+
+    char src_addr[INET6_ADDRSTRLEN];
+    char dst_addr[INET6_ADDRSTRLEN];
+    inet_ntop(AF_INET6, &src, src_addr, INET6_ADDRSTRLEN);
+    inet_ntop(AF_INET6, &dst, dst_addr, INET6_ADDRSTRLEN);
+
+    printf("   |-Source IPv6: %s\n", src_addr);
+    printf("   |-Dest IPv6  : %s\n", dst_addr);
+
+}
+// ---------------------------------------------------
+
+void hexdump(const void *data, size_t size) {
+    char ascii[17];
+    size_t i, j;
+    ascii[16] = '\0';
+    for (i = 0; i < size; ++i) {
+        dprintf(2, "%02X ", ((unsigned char *)data)[i]);
+        if (((unsigned char *)data)[i] >= ' ' &&
+            ((unsigned char *)data)[i] <= '~') {
+            ascii[i % 16] = ((unsigned char *)data)[i];
+        } else {
+            ascii[i % 16] = '.';
+        }
+        if ((i + 1) % 8 == 0 || i + 1 == size) {
+            dprintf(2, " ");
+            if ((i + 1) % 16 == 0) {
+                dprintf(2, "|  %s \n", ascii);
+            } else if (i + 1 == size) {
+                ascii[(i + 1) % 16] = '\0';
+                if ((i + 1) % 16 <= 8) {
+                    dprintf(2, " ");
+                }
+                for (j = (i + 1) % 16; j < 16; ++j) {
+                    dprintf(2, "   ");
+                }
+                dprintf(2, "|  %s \n", ascii);
+            }
+        }
+    }
+}
 
 
 /// @brief allocates or reconnects to a tun/tap device. The caller must reserve enough space in *dev. 
@@ -322,7 +403,13 @@ int main(int argc, char *argv[]) {
         FD_ZERO(&rd_set);
         FD_SET(tap_fd, &rd_set); 
         FD_SET(net_fd, &rd_set);
+        /*
+            监听多个套接字的 I/O 事件
+            第一个参数固定为最大文件描述符+1
+            rd_set: 可读事件的fd集合
 
+            rd_set集合将被操作系统修改，只会留下就绪的文件描述符，其他文件描述符则会被清除
+        */
         ret = select(maxfd + 1, &rd_set, NULL, NULL, NULL);
 
         if (ret < 0 && errno == EINTR){
@@ -333,7 +420,9 @@ int main(int argc, char *argv[]) {
             perror("select()");
             exit(1);
         }
+        // 报文格式的加解密都是在 net <-> tun 之间的
 
+        // rd_set只有tun就绪了 说明是app消息到了tun 处理后转发给net(代表真实网卡)
         if(FD_ISSET(tap_fd, &rd_set)) {
             /* data from tun/tap: just read it and write it to the network */
             
@@ -345,16 +434,20 @@ int main(int argc, char *argv[]) {
             /* write length + packet */
             plength = htons(nread);
             nwrite = cwrite(net_fd, (char *)&plength, sizeof(plength));
+            printf("[+] write plength\n");
             nwrite = cwrite(net_fd, buffer, nread);
-            
+            print_ipv6_header(buffer);
+            printf("[+] write buffer\n");
+
             printf("TAP2NET %lu: Written %d bytes to the network\n", tap2net, nwrite);
         }
 
+        // rd_set只有net就绪了 说明是外部消息来了 处理后转发给tun0
         if(FD_ISSET(net_fd, &rd_set)) {
             /* data from the network: read it, and write it to the tun/tap interface. 
             * We need to read the length first, and then the packet */
 
-            /* Read length */      
+            /* Read length */
             nread = read_n(net_fd, (char *)&plength, sizeof(plength));
             if(nread == 0) {
                 /* ctrl-c at the other end */
@@ -368,6 +461,7 @@ int main(int argc, char *argv[]) {
             printf("NET2TAP %lu: Read %d bytes from the network\n", net2tap, nread);
 
             /* now buffer[] contains a full packet or frame, write it into the tun/tap interface */ 
+            hexdump(buffer, nread);
             nwrite = cwrite(tap_fd, buffer, nread);
             printf("NET2TAP %lu: Written %d bytes to the tap interface\n", net2tap, nwrite);
         }
